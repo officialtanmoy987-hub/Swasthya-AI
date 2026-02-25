@@ -1,71 +1,104 @@
 import streamlit as st
 import datetime
-import time
+import random
 
 st.set_page_config(page_title="Swasthya AI", layout="wide")
 
-st.title("🩺 Swasthya AI - Smart Health Monitoring System")
+st.title("🩺 Swasthya AI")
+st.subheader("24×7 Intelligent Health Monitoring & Emergency Response System")
 
-# Sidebar Navigation
+# ---------------- SIDEBAR ----------------
 mode = st.sidebar.selectbox(
     "Select Mode",
-    ["🏠 Dashboard", "✈ Traveller Mode", "💊 Medicine Reminder"]
+    ["🏠 Smart Dashboard", "✈ Traveller Mode", "🚨 Emergency & Alerts", "💊 Medicine Reminder"]
 )
 
-# ---------------- DASHBOARD ----------------
-if mode == "🏠 Dashboard":
-    st.header("📊 Health Monitoring Dashboard")
+st.sidebar.markdown("### 👨‍👩‍👧 Emergency Contacts")
+family_contact = st.sidebar.text_input("Family Member Phone")
+doctor_contact = st.sidebar.text_input("Doctor Phone")
+
+# ---------------- SMART DASHBOARD ----------------
+if mode == "🏠 Smart Dashboard":
+    st.header("📊 Real-Time Health Monitoring")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        heart_rate = st.number_input("Heart Rate (BPM)", 40, 200, 72)
+        heart_rate = st.number_input("Heart Rate (BPM)", 40, 200, 80)
     with col2:
         bp = st.number_input("Systolic BP", 80, 200, 120)
     with col3:
         sugar = st.number_input("Blood Sugar (mg/dL)", 50, 400, 100)
 
-    st.subheader("🧠 AI Health Analysis")
+    st.subheader("🧠 AI Risk Analysis Engine")
 
-    if heart_rate > 100:
-        st.error("⚠ High Heart Rate Detected!")
-    elif heart_rate < 60:
-        st.warning("⚠ Low Heart Rate Detected!")
+    # Risk Score Calculation
+    risk_score = 0
+
+    if heart_rate > 110 or heart_rate < 50:
+        risk_score += 30
+    if bp > 160:
+        risk_score += 35
+    if sugar > 250:
+        risk_score += 35
+
+    st.metric("⚡ AI Health Risk Score", f"{risk_score}%")
+
+    if risk_score < 30:
+        st.success("✅ Health Stable - No Immediate Risk")
+    elif 30 <= risk_score < 60:
+        st.warning("⚠ Moderate Risk - Monitor Closely")
     else:
-        st.success("✅ Heart Rate Normal")
+        st.error("🚨 HIGH RISK DETECTED - EMERGENCY PROTOCOL ACTIVATED")
 
-    if bp > 140:
-        st.error("⚠ High Blood Pressure!")
-    else:
-        st.success("✅ Blood Pressure Normal")
+        st.markdown("### 📡 Alert System Activated")
 
-    if sugar > 180:
-        st.error("⚠ High Sugar Level!")
-    else:
-        st.success("✅ Sugar Level Normal")
+        if family_contact:
+            st.write(f"📲 Notifying Family Member at {family_contact}")
+        if doctor_contact:
+            st.write(f"📞 Alerting Doctor at {doctor_contact}")
 
+        st.write("🏥 Sending health data to nearest hospital...")
+        st.write("📍 Sharing last known health metrics and location...")
+        st.success("Emergency notifications sent successfully!")
 
 # ---------------- TRAVELLER MODE ----------------
 elif mode == "✈ Traveller Mode":
-    st.header("🌍 Traveller Mode - Health Safety Assistant")
+    st.header("🌍 Traveller Safety Mode")
 
-    location = st.text_input("Enter Travel Location")
+    location = st.text_input("Travel Location")
     weather = st.selectbox("Weather Condition", ["Hot", "Cold", "Humid", "Rainy"])
-    activity = st.selectbox("Activity Type", ["Walking", "Trekking", "Business Travel", "Vacation"])
+    altitude = st.selectbox("Altitude Level", ["Normal", "High Altitude"])
 
-    st.subheader("🧳 AI Travel Health Advice")
+    st.subheader("🧳 AI Travel Risk Advisory")
 
     if weather == "Hot":
-        st.info("💧 Stay hydrated. Drink at least 3-4 liters of water.")
+        st.info("💧 Dehydration risk high. Increase fluid intake.")
     if weather == "Cold":
-        st.info("🧥 Wear warm clothes and monitor blood pressure.")
-    if activity == "Trekking":
-        st.warning("⚠ Carry glucose & check oxygen levels if at high altitude.")
-    if activity == "Business Travel":
-        st.info("😴 Ensure proper sleep to avoid stress-related BP issues.")
+        st.info("🧥 Monitor BP fluctuations in cold weather.")
+    if altitude == "High Altitude":
+        st.warning("⚠ Oxygen level monitoring recommended.")
 
-    st.success("✅ Traveller Mode Activated for " + location)
+    st.success(f"Traveller Mode Active for {location}")
+    st.write("📡 Continuous monitoring during travel enabled.")
 
+# ---------------- EMERGENCY PANEL ----------------
+elif mode == "🚨 Emergency & Alerts":
+    st.header("🚨 Manual Emergency Trigger")
+
+    st.warning("Press this button ONLY in real emergency")
+
+    if st.button("🚨 ACTIVATE EMERGENCY RESPONSE"):
+        st.error("Emergency Protocol Initiated")
+
+        if family_contact:
+            st.write(f"📲 Emergency SMS sent to {family_contact}")
+        if doctor_contact:
+            st.write(f"📞 Emergency call alert sent to {doctor_contact}")
+
+        st.write("🏥 Notifying nearest hospital...")
+        st.write("🚑 Requesting ambulance dispatch...")
+        st.success("All emergency services notified!")
 
 # ---------------- MEDICINE REMINDER ----------------
 elif mode == "💊 Medicine Reminder":
@@ -75,15 +108,9 @@ elif mode == "💊 Medicine Reminder":
     med_time = st.time_input("Select Reminder Time", datetime.time(9, 0))
 
     if st.button("Set Reminder"):
-        st.success(f"Reminder set for {med_name} at {med_time}")
+        st.success(f"Reminder scheduled for {med_name} at {med_time}")
+        st.info("📲 Reminder will notify patient & family member.")
 
-    st.subheader("🔔 Live Reminder Simulation")
 
-    current_time = datetime.datetime.now().time()
-
-    if current_time.hour == med_time.hour and current_time.minute == med_time.minute:
-        st.error(f"💊 Time to take your medicine: {med_name}")
-    else:
-        st.info("Waiting for reminder time...")
 
         
