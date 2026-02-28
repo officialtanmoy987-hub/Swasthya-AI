@@ -1,10 +1,16 @@
 import datetime
-
+import io
 import streamlit as st
+import pandas as pd
+import joblib
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
 
 from services.db import init_db, save_emergency_event, save_health_record
 from services.ml import predict_risk_probability, train_and_save_model
 from services.sms import send_bulk_sms
+from services.wearable_connectors import sync_fitbit_once, sync_google_fit_once
 
 st.set_page_config(page_title="Swasthya AI", layout="wide")
 init_db()
@@ -22,7 +28,14 @@ if st.sidebar.button("Train/Refresh AI Model"):
 
 mode = st.sidebar.selectbox(
     "Select Mode",
-    ["Smart Dashboard", "Traveller Mode", "Emergency and Alerts", "Medicine Reminder"],
+    [
+        "Smart Dashboard",
+        "Traveller Mode",
+        "Emergency and Alerts",
+        "Medicine Reminder",
+        "Model Trainer (CSV)",
+        "Wearable Connectors",
+    ],
 )
 
 st.sidebar.markdown("### Emergency Contacts")
@@ -120,6 +133,112 @@ elif mode == "Medicine Reminder":
             trigger_alerts("medicine_reminder", reminder_msg)
         else:
             st.warning("Enter medicine name before setting reminder.")
+
+elif mode == "Model Trainer (CSV)":
+    st.header("Train AI Model with scikit-learn")
+    st.write("Upload a CSV file, choose feature columns and target column, then train.")
+
+    uploaded = st.file_uploader("Upload CSV", type=["csv"])
+    if uploaded is not None:
+        raw = uploaded.read()
+        df = pd.read_csv(io.BytesIO(raw))
+        st.write("Preview")
+        st.dataframe(df.head())
+
+        if df.shape[1] < 2:
+            st.error("CSV must have at least 2 columns.")
+        else:
+            all_cols = list(df.columns)
+            target_col = st.selectbox("Target Column (label)", all_cols)
+            feature_cols = st.multiselect(
+                "Feature Columns (inputs)",
+                [c for c in all_cols if c != target_col],
+                default=[c for c in all_cols if c != target_col][:3],
+            )
+            model_path = st.text_input("Model Save Path (.joblib)", "trained_model.joblib")
+
+            if st.button("Train scikit-learn Model"):
+                if not feature_cols:
+                    st.warning("Select at least one feature column.")
+                else:
+                    x = df[feature_cols]
+                    y = df[target_col]
+
+                    x = x.apply(pd.to_numeric, errors="coerce")
+                    y = pd.to_numeric(y, errors="coerce")
+                    clean = pd.concat([x, y], axis=1).dropna()
+
+                    x_clean = clean[feature_cols]
+                    y_clean = clean[target_col].astype(int)
+
+                    if y_clean.nunique() < 2:
+                        st.error("Target needs at least 2 classes.")
+                    elif len(clean) < 10:
+                        st.error("Not enough valid rows after cleanup. Need at least 10.")
+                    else:
+                        x_train, x_test, y_train, y_test = train_test_split(
+                            x_clean, y_clean, test_size=0.2, random_state=42
+                        )
+                        model = LogisticRegression(max_iter=1000)
+                        model.fit(x_train, y_train)
+                        y_pred = model.predict(x_test)
+                        acc = accuracy_score(y_test, y_pred)
+
+                        st.success("Model trained successfully.")
+                        st.metric("Accuracy", f"{acc:.2%}")
+                        joblib.dump(
+                            {
+                                "model": model,
+                                "feature_columns": feature_cols,
+                                "target_column": target_col,
+                            },
+                            model_path,
+                        )
+                        st.success(f"Model saved: {model_path}")
+
+elif mode == "Wearable Connectors":
+    st.header("Wearable Connectors (Fitbit / Google Fit)")
+    st.write("Fetch heart-rate from provider APIs and push to auto-analysis gateway.")
+    st.caption(
+        "Most watches do not expose direct Bluetooth to Python apps. "
+        "Production flow is watch -> provider cloud -> this connector -> gateway."
+    )
+
+    provider = st.selectbox("Provider", ["fitbit", "googlefit"])
+    access_token = st.text_input("Access Token", type="password")
+    gateway_url = st.text_input("Gateway URL", "http://127.0.0.1:8080")
+    fallback_bp = st.number_input("Fallback Systolic BP", min_value=80, max_value=220, value=120)
+    fallback_sugar = st.number_input("Fallback Blood Sugar", min_value=50, max_value=450, value=100)
+
+    if st.button("Sync Now"):
+        if not access_token.strip():
+            st.error("Access token is required.")
+        else:
+            if provider == "fitbit":
+                ok, msg = sync_fitbit_once(
+                    access_token=access_token.strip(),
+                    gateway_url=gateway_url.strip(),
+                    systolic_bp=float(fallback_bp),
+                    blood_sugar=float(fallback_sugar),
+                    family_contact=family_contact.strip() or None,
+                    doctor_contact=doctor_contact.strip() or None,
+                )
+            else:
+                ok, msg = sync_google_fit_once(
+                    access_token=access_token.strip(),
+                    gateway_url=gateway_url.strip(),
+                    systolic_bp=float(fallback_bp),
+                    blood_sugar=float(fallback_sugar),
+                    family_contact=family_contact.strip() or None,
+                    doctor_contact=doctor_contact.strip() or None,
+                )
+
+            if ok:
+                st.success("Sync successful.")
+                st.code(msg)
+            else:
+                st.error(msg)
+
 
 
 
