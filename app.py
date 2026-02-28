@@ -1,5 +1,6 @@
 import datetime
 import io
+import secrets
 import streamlit as st
 import pandas as pd
 import joblib
@@ -7,6 +8,15 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 
+from services.fitbit_auth import (
+    build_authorize_url,
+    exchange_code_for_tokens,
+    generate_pkce_pair,
+    load_tokens,
+    refresh_access_token,
+    save_tokens,
+    token_is_expired,
+)
 from services.db import init_db, save_emergency_event, save_health_record
 from services.ml import predict_risk_probability, train_and_save_model
 from services.sms import send_bulk_sms
@@ -205,39 +215,151 @@ elif mode == "Wearable Connectors":
     )
 
     provider = st.selectbox("Provider", ["fitbit", "googlefit"])
-    access_token = st.text_input("Access Token", type="password")
+    access_token = st.text_input("Access Token (optional if using OAuth)", type="password")
     gateway_url = st.text_input("Gateway URL", "http://127.0.0.1:8080")
     fallback_bp = st.number_input("Fallback Systolic BP", min_value=80, max_value=220, value=120)
     fallback_sugar = st.number_input("Fallback Blood Sugar", min_value=50, max_value=450, value=100)
 
+    if provider == "fitbit":
+        st.subheader("Fitbit OAuth Setup")
+        client_id = st.text_input("Fitbit Client ID")
+        client_secret = st.text_input("Fitbit Client Secret (if required)", type="password")
+        redirect_uri = st.text_input("Redirect URI", "http://127.0.0.1:8765/callback")
+        scope = st.text_input("Scope", "heartrate")
+        auth_code = st.text_input("Authorization Code")
+
+        col_auth, col_exchange, col_refresh = st.columns(3)
+        with col_auth:
+            if st.button("Generate Login URL"):
+                if not client_id.strip():
+                    st.error("Client ID is required.")
+                else:
+                    code_verifier, code_challenge = generate_pkce_pair()
+                    state = secrets.token_urlsafe(24)
+                    st.session_state["fitbit_code_verifier"] = code_verifier
+                    st.session_state["fitbit_state"] = state
+                    url = build_authorize_url(
+                        client_id=client_id.strip(),
+                        redirect_uri=redirect_uri.strip(),
+                        scope=scope.strip(),
+                        state=state,
+                        code_challenge=code_challenge,
+                    )
+                    st.session_state["fitbit_auth_url"] = url
+                    st.info("Open Fitbit login URL below, then paste returned code.")
+
+        if st.session_state.get("fitbit_auth_url"):
+            st.markdown(f"[Open Fitbit Authorization URL]({st.session_state['fitbit_auth_url']})")
+
+        with col_exchange:
+            if st.button("Exchange Code"):
+                verifier = st.session_state.get("fitbit_code_verifier")
+                if not client_id.strip():
+                    st.error("Client ID is required.")
+                elif not auth_code.strip():
+                    st.error("Authorization code is required.")
+                elif not verifier:
+                    st.error("Generate Login URL first in this session.")
+                else:
+                    ok, payload = exchange_code_for_tokens(
+                        client_id=client_id.strip(),
+                        code=auth_code.strip(),
+                        redirect_uri=redirect_uri.strip(),
+                        code_verifier=verifier,
+                        client_secret=client_secret.strip() or None,
+                    )
+                    if ok:
+                        save_tokens(payload)
+                        st.success("Fitbit tokens saved to fitbit_tokens.json")
+                    else:
+                        st.error(str(payload))
+
+        with col_refresh:
+            if st.button("Refresh Saved Token"):
+                saved = load_tokens()
+                if not saved:
+                    st.error("No saved tokens found.")
+                elif not client_id.strip():
+                    st.error("Client ID is required to refresh.")
+                elif not saved.get("refresh_token"):
+                    st.error("Saved token does not contain refresh_token.")
+                else:
+                    ok, payload = refresh_access_token(
+                        client_id=client_id.strip(),
+                        refresh_token=str(saved["refresh_token"]),
+                        client_secret=client_secret.strip() or None,
+                    )
+                    if ok:
+                        save_tokens(payload)
+                        st.success("Token refreshed and saved.")
+                    else:
+                        st.error(str(payload))
+
+        saved = load_tokens()
+        if saved:
+            st.caption(f"Saved token loaded. Expires at unix time: {int(saved.get('expires_at', 0))}")
+
     if st.button("Sync Now"):
-        if not access_token.strip():
-            st.error("Access token is required.")
-        else:
-            if provider == "fitbit":
-                ok, msg = sync_fitbit_once(
-                    access_token=access_token.strip(),
-                    gateway_url=gateway_url.strip(),
-                    systolic_bp=float(fallback_bp),
-                    blood_sugar=float(fallback_sugar),
-                    family_contact=family_contact.strip() or None,
-                    doctor_contact=doctor_contact.strip() or None,
-                )
+        if provider == "fitbit":
+            token_to_use = access_token.strip()
+            saved = load_tokens() if not token_to_use else None
+            if not token_to_use and saved:
+                if token_is_expired(saved):
+                    if not client_id.strip():
+                        st.error("Saved Fitbit token expired. Enter Client ID to auto-refresh.")
+                        st.stop()
+                    if not saved.get("refresh_token"):
+                        st.error("Saved Fitbit token expired and no refresh_token was found.")
+                        st.stop()
+                    ok_refresh, refreshed = refresh_access_token(
+                        client_id=client_id.strip(),
+                        refresh_token=str(saved["refresh_token"]),
+                        client_secret=client_secret.strip() or None,
+                    )
+                    if not ok_refresh:
+                        st.error(f"Auto-refresh failed: {refreshed}")
+                        st.stop()
+                    save_tokens(refreshed)
+                    token_to_use = str(refreshed.get("access_token", ""))
+                else:
+                    token_to_use = str(saved.get("access_token", ""))
+
+            if not token_to_use:
+                st.error("No usable Fitbit access token. Paste token or complete OAuth setup.")
             else:
-                ok, msg = sync_google_fit_once(
-                    access_token=access_token.strip(),
+                ok, msg = sync_fitbit_once(
+                    access_token=token_to_use,
                     gateway_url=gateway_url.strip(),
                     systolic_bp=float(fallback_bp),
                     blood_sugar=float(fallback_sugar),
                     family_contact=family_contact.strip() or None,
                     doctor_contact=doctor_contact.strip() or None,
                 )
+                if ok:
+                    st.success("Sync successful.")
+                    st.code(msg)
+                else:
+                    st.error(msg)
+        else:
+            if not access_token.strip():
+                st.error("Access token is required.")
+                st.stop()
+
+            ok, msg = sync_google_fit_once(
+                access_token=access_token.strip(),
+                gateway_url=gateway_url.strip(),
+                systolic_bp=float(fallback_bp),
+                blood_sugar=float(fallback_sugar),
+                family_contact=family_contact.strip() or None,
+                doctor_contact=doctor_contact.strip() or None,
+            )
 
             if ok:
                 st.success("Sync successful.")
                 st.code(msg)
             else:
                 st.error(msg)
+
 
 
 
